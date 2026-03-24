@@ -285,7 +285,7 @@ def create_app() -> Flask:
 def main() -> None:
     app = create_app()
     http_host = os.getenv("HTTP_HOST", "0.0.0.0").strip() or "0.0.0.0"
-    http_port = get_env_int("HTTP_PORT", 8090)
+    http_port = int(os.getenv("PORT", os.getenv("HTTP_PORT", "8090")))
 
     print(f"[{now_str()}] 启动 command-bridge（uniCloud HTTP -> MQTT）")
     print(f"  - HTTP_HOST   : {http_host}")
