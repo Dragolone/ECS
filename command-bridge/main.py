@@ -78,6 +78,47 @@ def resolve_topic(base_prefix: str, cmd: str) -> str:
     raise ValueError(f"暂不支持的 cmd: {cmd}")
 
 
+def normalize_move_params(params: dict[str, Any]) -> dict[str, Any]:
+    def is_number(v: Any) -> bool:
+        if isinstance(v, bool):
+            return False
+        if isinstance(v, (int, float)):
+            return True
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return False
+            try:
+                float(s)
+                return True
+            except Exception:
+                return False
+        return False
+
+    def to_float(v: Any) -> float:
+        if isinstance(v, str):
+            return float(v.strip())
+        return float(v)
+
+    def clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
+        return max(lo, min(hi, v))
+
+    # 优先支持摇杆 x/y
+    x = params.get("x")
+    y = params.get("y")
+    if is_number(x) and is_number(y):
+        fx = clamp(to_float(x))
+        fy = clamp(to_float(y))
+        return {"x": fx, "y": fy}
+
+    # 兼容旧方向控制
+    direction = params.get("direction")
+    if isinstance(direction, str) and direction.strip():
+        return {"direction": direction.strip()}
+
+    raise ValueError("move 缺少有效的 direction 或 x/y")
+
+
 def normalize_payload(body: Any) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise ValueError("请求体必须是 JSON 对象")
@@ -243,14 +284,25 @@ def create_app() -> Flask:
             print(f"[{now_str()}] 参数校验失败：{exc}")
             return build_error(ERROR_INVALID_FIELD, str(exc), 400)
 
+        # move 参数兼容：direction / x,y 摇杆
+        if payload["cmd"] == "move":
+            print(f"[{now_str()}] move 原始 params: {json.dumps(payload.get('params', {}), ensure_ascii=False)}")
+            try:
+                payload["params"] = normalize_move_params(payload.get("params", {}))
+            except ValueError as exc:
+                print(f"[{now_str()}] move 参数归一化失败：{exc}")
+                return build_error(ERROR_INVALID_FIELD, str(exc), 400)
+            print(f"[{now_str()}] move 归一化 params: {json.dumps(payload['params'], ensure_ascii=False)}")
+
         topic = resolve_topic(app.config["MQTT_BASE_PREFIX"], payload["cmd"])
 
         print(f"[{now_str()}] 收到下行命令")
         print(f"  robotCode : {payload['robotCode']}")
         print(f"  cmd       : {payload['cmd']}")
+        print(f"  params    : {json.dumps(payload.get('params', {}), ensure_ascii=False)}")
         print(f"  topic     : {topic}")
         print(f"  requestId : {payload['requestId']}")
-        print(f"  payload   : {json.dumps(payload, ensure_ascii=False)}")
+        print(f"  publish   : {json.dumps(payload, ensure_ascii=False)}")
 
         mqtt_bridge: MQTTCommandBridge = app.config["MQTT_BRIDGE"]
         if not mqtt_bridge.is_connected():
