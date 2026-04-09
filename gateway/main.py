@@ -155,15 +155,26 @@ class Ingestor:
 # WebSocket Client Manager
 # ---------------------------------------------------------------------------
 
+MAX_WS_CLIENTS = int(os.getenv("MAX_WS_CLIENTS", "200"))
+MAX_WS_MESSAGE_SIZE = int(os.getenv("MAX_WS_MESSAGE_SIZE", "1024"))
+MAX_MQTT_PAYLOAD_SIZE = int(os.getenv("MAX_MQTT_PAYLOAD_SIZE", "65536"))
+
 class WSManager:
-    def __init__(self):
+    def __init__(self, max_clients: int = MAX_WS_CLIENTS):
         self._clients = set()
         self._lock = threading.Lock()
+        self._max_clients = max_clients
 
-    def add(self, ws):
+    def is_full(self) -> bool:
+        return len(self._clients) >= self._max_clients
+
+    def add(self, ws) -> bool:
         with self._lock:
+            if len(self._clients) >= self._max_clients:
+                return False
             self._clients.add(ws)
         print(f"[{now_str()}] WS 客户端连接，当前 {len(self._clients)} 个")
+        return True
 
     def remove(self, ws):
         with self._lock:
@@ -197,6 +208,41 @@ class WSManager:
 
 STATUS_COMMANDS = {"start", "stop", "clear_error", "emergency_stop"}
 MOVE_COMMANDS = {"move"}
+VALID_DIRECTIONS = {"forward", "backward", "left", "right", "up", "down"}
+
+
+def safe_token_compare(a: str, b: str) -> bool:
+    try:
+        return hmac.compare_digest(str(a), str(b))
+    except (TypeError, ValueError):
+        return False
+
+
+def verify_signed_ws_token(token_str: str, secret: str) -> Optional[str]:
+    """Verify HMAC-signed WS token (uid:expiry_ms:signature). Returns uid or None."""
+    if not token_str or not secret:
+        return None
+    parts = token_str.split(":", 2)
+    if len(parts) != 3:
+        return None
+    uid, expiry_str, signature = parts
+    if not uid or not expiry_str or not signature:
+        return None
+    try:
+        expiry = int(expiry_str)
+    except (ValueError, TypeError):
+        return None
+    if expiry < int(time.time() * 1000):
+        return None
+    payload = f"{uid}:{expiry_str}"
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not safe_token_compare(signature, expected):
+        return None
+    return uid
 
 ERROR_INVALID_TOKEN = 4001
 ERROR_INVALID_JSON = 4002
@@ -235,7 +281,10 @@ def normalize_move_params(params: dict) -> dict:
         return {"x": clamp(to_float(x)), "y": clamp(to_float(y))}
     direction = params.get("direction")
     if isinstance(direction, str) and direction.strip():
-        return {"direction": direction.strip()}
+        d = direction.strip().lower()
+        if d not in VALID_DIRECTIONS:
+            raise ValueError(f"不支持的 direction: {d}")
+        return {"direction": d}
     raise ValueError("move 缺少有效的 direction 或 x/y")
 
 def normalize_command_payload(body: Any) -> dict:
@@ -306,7 +355,11 @@ class MQTTClient:
         print(f"[{now_str()}] MQTT 断开 rc={reason_code_to_int(reason_code)}（自动重连中）")
 
     def _on_message(self, _client, _userdata, msg):
-        payload_text = (msg.payload or b"").decode("utf-8", errors="replace")
+        raw_bytes = msg.payload or b""
+        if len(raw_bytes) > MAX_MQTT_PAYLOAD_SIZE:
+            print(f"[{now_str()}] MQTT 消息过大 ({len(raw_bytes)} bytes)，丢弃")
+            return
+        payload_text = raw_bytes.decode("utf-8", errors="replace")
         try:
             parsed = json.loads(payload_text)
         except Exception as e:
@@ -455,7 +508,7 @@ def create_app():
     @app.post("/sendCommand")
     def send_command():
         header_token = request.headers.get("x-command-token", "").strip()
-        if not header_token or not hmac.compare_digest(header_token, command_token):
+        if not header_token or not safe_token_compare(header_token, command_token):
             return build_error(ERROR_INVALID_TOKEN, "invalid command token", 401)
 
         body = request.get_json(silent=True)
@@ -495,7 +548,6 @@ def create_app():
             "data": {
                 "mqttConnected": mqtt_client.is_connected(),
                 "wsClients": ws_manager.count,
-                "basePrefix": mqtt_base_prefix,
             },
         })
 
@@ -503,15 +555,24 @@ def create_app():
     @sock.route("/ws")
     def ws_handler(ws):
         token = request.args.get("token", "").strip()
-        if not token or not hmac.compare_digest(token, ws_token):
+        uid = verify_signed_ws_token(token, ws_token)
+        if uid is None:
             try:
                 ws.send(json.dumps({"type": "error", "msg": "invalid token"}))
             except Exception:
                 pass
             return
 
+        if ws_manager.is_full():
+            try:
+                ws.send(json.dumps({"type": "error", "msg": "server full"}))
+            except Exception:
+                pass
+            return
+
         ws.send(json.dumps({"type": "connected", "msg": "ok"}))
-        ws_manager.add(ws)
+        if not ws_manager.add(ws):
+            return
         try:
             while True:
                 try:
@@ -520,6 +581,8 @@ def create_app():
                     break
                 if data is None:
                     break
+                if isinstance(data, (str, bytes)) and len(data) > MAX_WS_MESSAGE_SIZE:
+                    continue
                 try:
                     msg = json.loads(data)
                     if msg.get("type") == "ping":
