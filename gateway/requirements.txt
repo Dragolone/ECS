@@ -1,0 +1,5 @@
+Flask
+flask-sock
+paho-mqtt
+requests
+python-dotenv
