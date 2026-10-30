@@ -114,9 +114,9 @@ cp .env.example .env
 | 变量 | 说明 | 示例 |
 |------|------|------|
 | `MQTT_HOST` | EMQX Broker 地址 | `43.139.45.139` |
-| `COMMAND_TOKEN` | HTTP 指令鉴权令牌 | `abc123` |
+| `COMMAND_TOKEN` | HTTP 指令鉴权令牌 | `openssl rand -hex 32` 生成 |
 | `INGEST_URL` | uniCloud telemetryIngest HTTP 地址 | `https://fc-mp-xxx.bspapp.com/telemetryIngest` |
-| `INGEST_TOKEN` | 云函数鉴权令牌 | `abc123` |
+| `INGEST_TOKEN` | 云函数鉴权令牌 | `openssl rand -hex 32` 生成 |
 
 ### 可选配置
 
@@ -188,6 +188,12 @@ curl http://localhost:8090/healthz
 
 #### 方法 A：用 wscat（推荐）
 
+`/ws` 只接受 HMAC 签名令牌（`uid:expiresAtMs:signature`），不能直接用 `WS_TOKEN` 本身。下文的 `<SIGNED_WS_TOKEN>` 用下面的命令生成（有效期 1 小时）：
+
+```bash
+python3 -c 'import hashlib,hmac,os,time; p=f"test:{int(time.time()*1000)+3600000}"; print(p+":"+hmac.new(os.environ["WS_TOKEN"].encode(),p.encode(),hashlib.sha256).hexdigest())'
+```
+
 安装：
 
 ```bash
@@ -197,7 +203,7 @@ npm install -g wscat
 连接：
 
 ```bash
-wscat -c "ws://localhost:8090/ws?token=abc123"
+wscat -c "ws://localhost:8090/ws?token=<SIGNED_WS_TOKEN>"
 ```
 
 连接成功后会收到：
@@ -229,7 +235,7 @@ import websockets
 import json
 
 async def test():
-    uri = "ws://localhost:8090/ws?token=abc123"
+    uri = "ws://localhost:8090/ws?token=<SIGNED_WS_TOKEN>"
     async with websockets.connect(uri) as ws:
         print("已连接，等待遥测推送...")
         # 发送心跳
@@ -249,7 +255,7 @@ asyncio.run(test())
 打开任意网页，按 F12 → Console，粘贴：
 
 ```javascript
-const ws = new WebSocket("ws://localhost:8090/ws?token=abc123");
+const ws = new WebSocket("ws://localhost:8090/ws?token=<SIGNED_WS_TOKEN>");
 ws.onopen = () => console.log("已连接");
 ws.onmessage = (e) => console.log("收到:", JSON.parse(e.data));
 ws.onclose = () => console.log("已断开");
@@ -262,7 +268,7 @@ ws.onclose = () => console.log("已断开");
 ```bash
 curl -X POST http://localhost:8090/sendCommand \
   -H "Content-Type: application/json" \
-  -H "x-command-token: abc123" \
+  -H "x-command-token: $COMMAND_TOKEN" \
   -d '{
     "robotCode": "12315",
     "cmd": "stop",
@@ -285,7 +291,7 @@ python3 main.py
 
 **终端 2** — 连接 WebSocket：
 ```bash
-wscat -c "ws://localhost:8090/ws?token=abc123"
+wscat -c "ws://localhost:8090/ws?token=<SIGNED_WS_TOKEN>"
 ```
 
 然后让机器人发送一条 MQTT 遥测消息（或用 MQTT 客户端手动发布）：
