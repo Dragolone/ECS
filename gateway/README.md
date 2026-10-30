@@ -40,6 +40,7 @@ gateway/
   .env.example       # 配置模板
   .env               # 实际配置（需自建，不提交 git）
   Procfile           # Render 部署启动命令
+  test_move_params.py  # move 参数校验测试（离线）
   README.md
 ```
 
@@ -337,7 +338,7 @@ mosquitto_pub -h 43.139.45.139 -t "01_test/Servers" \
 |------|-------|------|
 | 上行（机器人→gateway） | `{PREFIX}/Servers` | 遥测数据，gateway 订阅 |
 | 下行（gateway→机器人） | `{PREFIX}/status` | start / stop / clear_error / emergency_stop |
-| 下行（gateway→机器人） | `{PREFIX}/move` | move（x/y 或 direction） |
+| 下行（gateway→机器人） | `{PREFIX}/move` | move（vx/vy/wz/enable、x/y 或 direction） |
 
 默认 `PREFIX = 01_test`，由 `MQTT_BASE_PREFIX` 环境变量控制。
 
