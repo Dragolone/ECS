@@ -1,6 +1,7 @@
 """
 IoT Gateway 安全 + 压力测试脚本
 
+export COMMAND_TOKEN=... WS_TOKEN=...   # 和被测 gateway 的配置一致
 用法: python test_security.py [--host HOST] [--port PORT]
 需要先启动 gateway: python main.py
 """
@@ -275,11 +276,13 @@ def main():
     parser = argparse.ArgumentParser(description="IoT Gateway 安全测试")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=8090)
-    parser.add_argument("--command-token", default=os.getenv("COMMAND_TOKEN", "abc123"))
-    parser.add_argument("--ws-secret", default=os.getenv("WS_TOKEN", "abc123"))
+    parser.add_argument("--command-token", default=os.getenv("COMMAND_TOKEN"))
+    parser.add_argument("--ws-secret", default=os.getenv("WS_TOKEN") or os.getenv("COMMAND_TOKEN"))
     parser.add_argument("--skip-ws", action="store_true")
     parser.add_argument("--skip-stress", action="store_true")
     args = parser.parse_args()
+    if not args.command_token:
+        parser.error("缺少 COMMAND_TOKEN：请设置环境变量或传 --command-token")
 
     base = f"http://{args.host}:{args.port}"
     base_ws = f"ws://{args.host}:{args.port}"

@@ -11,6 +11,7 @@ IoT Gateway — 统一物联网网关
 import hashlib
 import hmac
 import json
+import math
 import os
 import queue
 import random
@@ -209,6 +210,7 @@ class WSManager:
 STATUS_COMMANDS = {"start", "stop", "clear_error", "emergency_stop"}
 MOVE_COMMANDS = {"move"}
 VALID_DIRECTIONS = {"forward", "backward", "left", "right", "up", "down"}
+VELOCITY_FIELDS = ("vx", "vy", "wz")
 
 
 def safe_token_compare(a: str, b: str) -> bool:
@@ -276,6 +278,26 @@ def normalize_move_params(params: dict) -> dict:
     def clamp(v, lo=-1.0, hi=1.0):
         return max(lo, min(hi, v))
 
+    def to_velocity(name):
+        v = params.get(name, 0)
+        if not is_number(v):
+            raise ValueError(f"{name} 必须是数字")
+        try:
+            value = to_float(v)
+        except OverflowError:
+            raise ValueError(f"{name} 超出数值范围")
+        # clamp(nan) 会得到 1.0，必须在限幅前拒绝，否则非法值变成满速
+        if not math.isfinite(value):
+            raise ValueError(f"{name} 必须是有限数字")
+        return clamp(value)
+
+    if any(name in params for name in VELOCITY_FIELDS):
+        velocity = {name: to_velocity(name) for name in VELOCITY_FIELDS}
+        enable = params.get("enable", True)
+        if not isinstance(enable, bool):
+            raise ValueError("enable 必须是布尔值")
+        return {**velocity, "enable": enable}
+
     x, y = params.get("x"), params.get("y")
     if is_number(x) and is_number(y):
         return {"x": clamp(to_float(x)), "y": clamp(to_float(y))}
@@ -285,7 +307,7 @@ def normalize_move_params(params: dict) -> dict:
         if d not in VALID_DIRECTIONS:
             raise ValueError(f"不支持的 direction: {d}")
         return {"direction": d}
-    raise ValueError("move 缺少有效的 direction 或 x/y")
+    raise ValueError("move 缺少有效的 vx/vy/wz、direction 或 x/y")
 
 def normalize_command_payload(body: Any) -> dict:
     if not isinstance(body, dict):
